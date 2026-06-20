@@ -7,10 +7,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Copy project metadata + source, then install the package (deps come from
-# pyproject.toml — the single source of truth shared with CI).
+# Install runtime deps from the HASH-LOCKED lockfile first — reproducible builds
+# (every dep pinned + sha256-verified) and a cacheable layer. Regenerate with:
+#   pip-compile --generate-hashes -o requirements.txt pyproject.toml
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
+
+# Then install the app package itself without re-resolving deps.
 COPY . .
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --no-deps .
 
 # Run as a non-root user (matches the kit's minimal-service Dockerfile).
 RUN useradd --create-home --uid 10001 appuser
