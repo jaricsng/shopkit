@@ -74,7 +74,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Scan API image for vulnerabilities (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
           format: sarif
@@ -147,7 +147,7 @@ jobs:
             VITE_API_URL=${{ vars.VITE_API_URL }}
 
       - name: Scan frontend image for vulnerabilities (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ env.IMAGE_TAG }}
           format: sarif
