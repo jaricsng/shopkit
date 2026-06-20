@@ -1,0 +1,63 @@
+# Local app stack: the ShopKit API + Postgres.
+#
+# The observability overlay layers on top of THIS file (it needs a service
+# named "app" on :8000 — see observability/docker-compose.observability.yml):
+#
+#   docker compose up -d                       # app + db + frontend
+#   make obs-up                                # + Jaeger/Prometheus/Grafana
+#
+# On boot the app runs migrations, seeds the catalog, then serves. The frontend
+# (nginx, :5173) serves the built SPA and proxies /api -> app:8000 — this is
+# what the CI `e2e` (Playwright) job points its browser at.
+
+services:
+  app:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://shopkit:shopkit@db:5432/shopkit
+      SECRET_KEY: ${SECRET_KEY:-dev-only-secret-change-me-32-bytes-min}
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_SERVICE_NAME: shopkit
+      OTLP_ENDPOINT: http://jaeger:4317
+      # Emit the STABLE HTTP metric (http.server.request.duration, seconds) +
+      # stable labels, matching the Grafana dashboard. See observability/
+      # METRIC-NAME-DECISION.md for why the reference resolves the kit's
+      # documented old-vs-new metric-name mismatch toward the stable name.
+      OTEL_SEMCONV_STABILITY_OPT_IN: http
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      FEATURE_CHECKOUT_ENABLED: ${FEATURE_CHECKOUT_ENABLED:-true}
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"   # nginx serves the SPA; matches the e2e job's wait on :5173
+    depends_on:
+      - app
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shopkit
+      POSTGRES_PASSWORD: shopkit
+      POSTGRES_DB: shopkit
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopkit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

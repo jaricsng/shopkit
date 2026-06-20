@@ -1,0 +1,85 @@
+[project]
+name = "shopkit"
+version = "0.1.0"
+description = "ShopKit — DevSecOps capstone reference backend (teaching artifact)"
+requires-python = ">=3.12"
+
+# Runtime dependencies (single source of truth — the Dockerfile installs this
+# package, CI installs it with the [dev] extra). Minimum-version specifiers so
+# the same project installs on the pinned 3.12 toolchain and newer.
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic[email]>=2.10",
+    "pydantic-settings>=2.7",
+    "SQLAlchemy>=2.0.36",
+    "psycopg[binary]>=3.2.10",
+    "alembic>=1.14",
+    "PyJWT>=2.10",
+    "stripe>=11.4",
+    "opentelemetry-sdk>=1.29",
+    "opentelemetry-api>=1.29",
+    "opentelemetry-instrumentation-fastapi>=0.50b0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.29",
+    "opentelemetry-exporter-prometheus>=0.50b0",
+    "prometheus-client>=0.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "black>=24.10",
+    "isort>=5.13",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100
+# The local alembic/ migrations dir makes isort think `alembic` is first-party;
+# it's the installed package. Pin it third-party so isort and ruff agree.
+known_third_party = ["alembic"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+# B008: FastAPI intentionally uses Depends()/Header()/Query() as default values.
+ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+# Match [tool.isort] — `alembic` is the installed package, not the local dir.
+known-third-party = ["alembic"]
+
+[tool.pytest.ini_options]
+# Default run = unit tests only (fast, no DB). Run integration explicitly with:
+#   pytest -m integration   (needs a Postgres DATABASE_URL)
+addopts = "-q -m 'not integration'"
+testpaths = ["tests"]
+markers = [
+    "integration: tests that run against a real Postgres database",
+]
+
+[tool.bandit]
+# CI runs `bandit -r app/ -c pyproject.toml -ll`. Tests use intentional test
+# credentials; app/ is what ships.
+exclude_dirs = ["tests", ".venv"]
+
+[tool.coverage.run]
+source = ["app"]
+# telemetry wiring only runs with a live collector; seed is a one-shot script.
+# Both are exercised in integration (compose boot), not unit tests.
+omit = ["app/telemetry.py", "app/seed.py"]

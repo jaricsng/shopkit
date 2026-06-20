@@ -1,0 +1,41 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Rule files are evaluated at evaluation_interval — must be top-level, not
+# nested under `global:` (a nested rule_files is silently rejected by
+# Prometheus's strict config schema).
+rule_files:
+  - /etc/prometheus/recording_rules.yml
+
+# Where to send firing alerts (the `app-slo` group in recording_rules.yml).
+# Must be top-level, same as rule_files. The `alertmanager` hostname
+# resolves on the shared Compose network (see docker-compose.observability.yml).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # TODO: rename "app" if you want a more specific job name, and update the
+  # `app:8000` target to your service's hostname:port (matches whatever
+  # name you give the service in your docker-compose / k8s manifest).
+  - job_name: app
+    static_configs:
+      - targets: ["app:8000"]
+    metrics_path: /metrics
+
+  - job_name: readiness
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://app:8000/ready
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

@@ -1,0 +1,549 @@
+name: Publish & Deploy
+
+# Runs on every merge to main.
+#
+# This is a SHAPE to adopt: build → Trivy hard-gate → SBOM → SLSA provenance →
+# semantic-version tag → deploy → Slack failure notification. Replace the
+# placeholders below (app names, registry paths, cloud provider) with your own.
+#
+# Three cloud deploy jobs (Azure Container Apps, AWS ECS, GCP Cloud Run) are
+# gated `if: false` by default — pick ONE (or none), fill in its TODOs, and
+# remove that job's `if: false` line. Delete the jobs you don't need. Each
+# gates production via a GitHub Environment with required reviewers (see each
+# job's `environment:`), and the Azure job is the .NET Aspire deploy path
+# (`azd provision`/`azd deploy`). Local multi-service orchestration is handled
+# by Aspire's AppHost (see `dotnet/`), not this file.
+
+on:
+  push:
+    branches: [main]
+
+# Team safety: serialize deploys so two merges landing close together don't
+# race the same environment. cancel-in-progress=false QUEUES the next run
+# rather than killing an in-flight deploy partway through.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_TAG: sha-${{ github.sha }}   # long SHA — consistent with type=sha,format=long below
+
+jobs:
+  # ─── Build and publish API image ────────────────────────────────────────────
+  publish-api:
+    name: Build, scan, and push API image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write   # required for Trivy SARIF upload to GitHub Security tab
+
+    outputs:
+      image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          # TODO: point at your API's build context
+          context: backend/
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan API image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-api.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"   # hard gate — fails the job on any CRITICAL or HIGH CVE
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()   # upload even when Trivy found issues so they appear in the Security tab
+        with:
+          sarif_file: trivy-api.sarif
+          category: trivy-api
+
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ env.IMAGE_TAG }}
+          format: cyclonedx-json
+          output-file: sbom-api.json
+
+      - name: Upload SBOM as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-api-${{ github.sha }}
+          path: sbom-api.json
+          retention-days: 90
+
+  # ─── Build and publish frontend image (delete if API-only) ─────────────────
+  publish-frontend:
+    name: Build, scan, and push frontend image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    outputs:
+      image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ env.IMAGE_TAG }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend/
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VITE_API_URL=${{ vars.VITE_API_URL }}
+
+      - name: Scan frontend image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-frontend.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend
+
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:${{ env.IMAGE_TAG }}
+          format: cyclonedx-json
+          output-file: sbom-frontend.json
+
+      - name: Upload SBOM as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-frontend-${{ github.sha }}
+          path: sbom-frontend.json
+          retention-days: 90
+
+  # ─── SLSA provenance attestation ────────────────────────────────────────────
+  #
+  # Generates SLSA Level 3 provenance for the API image using the official SLSA
+  # GitHub Generator. The resulting attestation can be verified with
+  # `slsa-verifier` / `cosign verify-attestation` and proves the image was built
+  # from this exact commit by GitHub Actions — not by any developer's machine.
+
+  slsa-provenance:
+    name: Generate SLSA provenance
+    needs: [publish-api]
+    permissions:
+      actions: read        # required to read workflow run
+      id-token: write      # required for keyless signing via Sigstore
+      packages: write      # required to push attestation to GHCR
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ghcr.io/${{ github.repository }}/api
+      digest: ${{ needs.publish-api.outputs.image }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Slack failure notification ──────────────────────────────────────────────
+  #
+  # Fires whenever any job in this workflow fails on main.
+  # Requires SLACK_WEBHOOK_URL secret (Incoming Webhook from Slack app settings).
+
+  notify-failure:
+    name: Notify Slack on failure
+    needs: [publish-api, tag-release]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Post failure message to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL not configured — skipping notification"
+            exit 0
+          fi
+          curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"text\": \":rotating_light: *${WORKFLOW}* failed on \`main\`\",
+              \"attachments\": [{
+                \"color\": \"danger\",
+                \"fields\": [
+                  {\"title\": \"Actor\", \"value\": \"${ACTOR}\", \"short\": true},
+                  {\"title\": \"Commit\", \"value\": \"${COMMIT_SHA:0:7}\", \"short\": true},
+                  {\"title\": \"Run\", \"value\": \"${RUN_URL}\", \"short\": false}
+                ]
+              }]
+            }"
+
+  # ─── Semantic release tag ───────────────────────────────────────────────────
+  #
+  # Reads a version string from your project's manifest file and creates a
+  # GitHub Release tagged v<version> only when that tag does not yet exist.
+  # TODO: replace the grep/sed line below with whatever your stack uses
+  # (pyproject.toml, package.json, VERSION file, ...).
+
+  tag-release:
+    name: Tag release if version is new
+    needs: [publish-api]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create tags and releases
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history to check existing tags
+
+      - name: Read version from project manifest
+        id: version
+        run: |
+          # TODO: adjust to your project's version source
+          VERSION=$(grep '^version = ' backend/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Release ${{ steps.version.outputs.tag }}" \
+            --notes "API image: \`ghcr.io/${{ github.repository }}/api:sha-${{ github.sha }}\`" \
+            --draft=false \
+            --prerelease=false
+
+  # ─── Deploy: Azure Container Apps ────────────────────────────────────────────
+  #
+  # To activate:
+  #   1. Run: azd auth login && azd pipeline config  (writes GitHub secrets automatically)
+  #   2. Create GitHub Environment: production-azure (add reviewer + AZURE_* secrets)
+  #   3. Remove the `if: false` line below
+
+  deploy-azure:
+    name: Deploy to Azure Container Apps
+    needs: [publish-api, publish-frontend]
+    runs-on: ubuntu-latest
+    environment: production-azure   # GitHub Environment — configure manual approval + secrets
+    if: false   # Enable: remove this line; run `azd pipeline config` first
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v1
+
+      - name: Log in to Azure (OIDC — keyless, no long-lived credentials)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision Azure infrastructure (idempotent)
+        run: azd provision --no-prompt
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Container Apps
+        run: azd deploy --no-prompt
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Health check + auto-rollback on failure
+        # Rollback shifts ingress traffic back to the previous revision, per
+        # operations/runbooks/rollback.md's Azure section. Set CONTAINERAPP_NAME
+        # + RESOURCE_GROUP to enable the rollback path.
+        run: |
+          API_URL=$(azd env get-value SERVICE_API_URI 2>/dev/null || \
+                    azd env get-values --output json | jq -r '.SERVICE_API_URI // empty')
+          if [ -z "$API_URL" ]; then
+            echo "⚠️  Could not determine API URL from azd env — skipping health check"
+            exit 0
+          fi
+          echo "API URL: $API_URL"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "${API_URL}/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && echo "✅ Azure deployment healthy" && exit 0
+            sleep 10
+          done
+          # TODO: set CONTAINERAPP_NAME + RESOURCE_GROUP (e.g. via vars.*) to
+          # enable auto-rollback; otherwise this just fails for manual handling.
+          APP="${CONTAINERAPP_NAME:-}"; RG="${RESOURCE_GROUP:-}"
+          if [ -n "$APP" ] && [ -n "$RG" ]; then
+            PREV=$(az containerapp revision list -n "$APP" -g "$RG" \
+              --query "reverse(sort_by([?properties.active], &properties.createdTime))[1].name" -o tsv 2>/dev/null || echo "")
+            if [ -n "$PREV" ]; then
+              echo "❌ Health check failed — shifting traffic back to $PREV"
+              az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$PREV=100"
+            fi
+          else
+            echo "❌ Health check failed — CONTAINERAPP_NAME/RESOURCE_GROUP not set, manual rollback needed (see operations/runbooks/rollback.md)"
+          fi
+          exit 1
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          CONTAINERAPP_NAME: ${{ vars.AZURE_CONTAINERAPP_NAME }}
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+
+      - name: Smoke test
+        run: |
+          API_URL=$(azd env get-value SERVICE_API_URI 2>/dev/null || \
+                    azd env get-values --output json | jq -r '.SERVICE_API_URI // empty')
+          if [ -n "$API_URL" ]; then
+            docker run --rm grafana/k6 run - \
+              -e BASE_URL="$API_URL" < load-testing/k6/smoke.js
+          fi
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+  # ─── Deploy: AWS ECS Fargate ──────────────────────────────────────────────────
+  #
+  # To activate:
+  #   1. Configure OIDC trust between this repo and an AWS deploy role
+  #   2. Create GitHub Environment: production-aws (add reviewer + AWS_* secrets)
+  #   3. Provide your own deploy script (TODO below) — e.g. an
+  #      `aws ecs update-service` invocation, or a CDK/Terraform apply
+  #   4. Remove the `if: false` line below
+
+  deploy-aws:
+    name: Deploy to AWS ECS Fargate
+    needs: [publish-api, publish-frontend]
+    runs-on: ubuntu-latest
+    environment: production-aws   # GitHub Environment — configure manual approval + secrets
+    if: false   # Enable: remove this line and configure AWS_* secrets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC — keyless)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Capture current (pre-deploy) task definition for rollback
+        id: prev
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          PREV=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query "services[0].taskDefinition" --output text 2>/dev/null || echo "")
+          echo "taskdef=$PREV" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to ECS
+        env:
+          REGION: ${{ vars.AWS_REGION }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+        # TODO: provide your own deploy script
+        run: bash deploy/aws-deploy.sh
+
+      - name: Health check + auto-rollback on failure
+        # Rollback re-deploys the previous task definition, per
+        # operations/runbooks/rollback.md's AWS ECS section.
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "${{ vars.AWS_ALB_URL }}/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && echo "✅ ECS deployment healthy" && exit 0
+            sleep 10
+          done
+          PREV="${{ steps.prev.outputs.taskdef }}"
+          if [ -n "$PREV" ] && [ -n "$SERVICE" ]; then
+            echo "❌ Health check failed — rolling back to $PREV"
+            aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+              --task-definition "$PREV" --force-new-deployment
+          else
+            echo "❌ Health check failed — ECS_SERVICE/previous task def unset, manual rollback needed (see operations/runbooks/rollback.md)"
+          fi
+          exit 1
+
+      - name: Smoke test
+        run: |
+          docker run --rm grafana/k6 run - \
+            -e BASE_URL="${{ vars.AWS_ALB_URL }}" < load-testing/k6/smoke.js
+
+  # ─── Deploy: GCP Cloud Run ────────────────────────────────────────────────────
+  #
+  # To activate:
+  #   1. Enable Workload Identity Federation in your GCP project (keyless auth)
+  #   2. Create GitHub Environment: production-gcp (add reviewer + GCP_* secrets)
+  #   3. Provide your own deploy script (TODO below), or apply
+  #      iac-terraform/gcp-cloud-run/ directly via `terraform apply`
+  #   4. Remove the `if: false` line below
+
+  deploy-gcp:
+    name: Deploy to GCP Cloud Run
+    needs: [publish-api, publish-frontend]
+    runs-on: ubuntu-latest
+    environment: production-gcp   # GitHub Environment — configure manual approval + secrets
+    if: false   # Enable: remove this line and configure GCP_* secrets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (Workload Identity — keyless)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Capture current (pre-deploy) revision for rollback
+        id: prev
+        run: |
+          PREV=$(gcloud run services describe TODO-your-service-name \
+            --region "${{ vars.GCP_REGION }}" --project "${{ vars.GCP_PROJECT_ID }}" \
+            --format="value(status.traffic[0].revisionName)" 2>/dev/null || echo "")
+          echo "revision=$PREV" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloud Run
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        # TODO: provide your own deploy script, or `terraform apply` against
+        # iac-terraform/gcp-cloud-run/ directly
+        run: bash deploy/gcp-deploy.sh
+
+      - name: Health check + auto-rollback on failure
+        # Rollback command per operations/runbooks/rollback.md's GCP section.
+        run: |
+          API_URL=$(gcloud run services describe TODO-your-service-name \
+            --region "${{ vars.GCP_REGION }}" --project "${{ vars.GCP_PROJECT_ID }}" \
+            --format="value(status.url)")
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "${API_URL}/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && echo "✅ Cloud Run healthy" && exit 0
+            sleep 10
+          done
+          PREV="${{ steps.prev.outputs.revision }}"
+          if [ -n "$PREV" ]; then
+            echo "❌ Health check failed — rolling back traffic to $PREV"
+            gcloud run services update-traffic TODO-your-service-name \
+              --region "${{ vars.GCP_REGION }}" --project "${{ vars.GCP_PROJECT_ID }}" \
+              --to-revisions="$PREV=100"
+          else
+            echo "❌ Health check failed and no previous revision captured — manual rollback needed"
+          fi
+          exit 1
+
+      - name: Smoke test
+        run: |
+          API_URL=$(gcloud run services describe TODO-your-service-name \
+            --region "${{ vars.GCP_REGION }}" --project "${{ vars.GCP_PROJECT_ID }}" \
+            --format="value(status.url)")
+          docker run --rm grafana/k6 run - \
+            -e BASE_URL="$API_URL" < load-testing/k6/smoke.js
+
+  # ─── DAST: ZAP baseline scan on staging ──────────────────────────────────────
+  #
+  # Runs a passive ZAP baseline scan against staging after every successful deploy.
+  # Catches security regressions (missing headers, new reflected inputs) before
+  # they reach production. Does NOT send destructive payloads — use the full scan
+  # (security/zap-scan.sh full) for active testing against a disposable environment.
+  #
+  # To activate:
+  #   1. Activate a deploy job above (Azure/AWS/GCP)
+  #   2. Update `needs:` and `target:` below to match that job + its URL
+  #   3. Remove the `if: false` line below
+
+  zap-baseline-scan:
+    name: ZAP baseline scan (staging)
+    needs: deploy-azure   # repoint to whichever deploy job you activate
+    runs-on: ubuntu-latest
+    if: false   # Enable after activating a deploy job
+
+    steps:
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          # TODO: point at your deployed staging URL (e.g. vars.STAGING_URL)
+          target: 'https://TODO-your-staging-url.example.com'
+          fail_action: true
+          cmd_options: '-I'   # informational-only mode — remove to hard-gate on MEDIUM+
+          issue_title: 'ZAP Baseline Scan — Staging'

@@ -1,0 +1,20 @@
+# Backstage-style catalog registration for this service. Fill in the
+# annotation/owner placeholders once this repo has a real remote and team.
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: shopkit
+  description: >-
+    Shopkit — scaffolded from platform-starter-kit.
+  annotations:
+    github.com/project-slug: devsecops-capstone-lab/shopkit
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - scaffolded-from-platform-starter-kit
+    - capstone-reference-solution
+spec:
+  type: service
+  lifecycle: experimental
+  # Reference solution models the resolved state doctor expects; your own repo
+  # uses your real Backstage group reference here.
+  owner: team-shopkit

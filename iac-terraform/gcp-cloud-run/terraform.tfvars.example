@@ -1,0 +1,4 @@
+app_name   = "shopkit"
+project_id = "REPLACE-WITH-YOUR-GCP-PROJECT-ID"
+image_tag  = "sha-REPLACE"
+github_repository = "your-org/shopkit"

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend build + test artifacts
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+playwright-report/
+test-results/
+.playwright/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+
+# .NET
+bin/
+obj/
+
+# Secrets / env
+.env
+*.local.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Load/security test artifacts
+security/reports/
+load-testing/k6/results.json

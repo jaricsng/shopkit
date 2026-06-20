@@ -1,0 +1,13 @@
+# Keep this updated as you add ecosystems — this only covers what
+# tools/scaffold.py copied in. Add "pip"/"npm"/"docker"/etc. entries
+# once you add your actual application code.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "terraform"
+    directory: "/iac-terraform/gcp-cloud-run"
+    schedule:
+      interval: "weekly"
