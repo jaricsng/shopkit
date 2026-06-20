@@ -3,7 +3,7 @@
 # protects — replace the placeholder below with your actual team or
 # handle. A CODEOWNERS file naming nobody real is the same as having
 # none, just quieter about it.
-* @TODO-set-your-team-or-handle
+* @jaricsng
 
 # For a TEAM, map paths to the teams that own them so the right reviewers
 # are auto-requested. Uncomment and set real @org/team handles:
