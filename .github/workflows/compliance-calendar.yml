@@ -1,0 +1,72 @@
+# Compliance calendar — turns recurring governance reviews into tracked,
+# auto-opened GitHub Issues. The closed issue (with its filled-in checklist) is
+# the audit evidence that the review actually happened on cadence.
+#
+# Cadence: access + risk reviews quarterly; vendor, DR, training, pen-test
+# annually. Trigger manually any time via "Run workflow" (pick a review) to
+# demo or to open one ad hoc. Checklist bodies live in .github/compliance/.
+name: Compliance calendar
+
+on:
+  schedule:
+    - cron: "0 9 1 1,4,7,10 *" # 09:00 UTC, 1st of Jan/Apr/Jul/Oct — quarterly
+    - cron: "0 9 8 1 *" # 09:00 UTC, Jan 8 — annual
+  workflow_dispatch:
+    inputs:
+      review:
+        description: Which review issue to open
+        type: choice
+        default: all
+        options: [all, access, risk, vendor, dr, training, pentest]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  open-reviews:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open due compliance review issues
+        uses: actions/github-script@v7
+        env:
+          COMPLIANCE_OWNER: ${{ vars.COMPLIANCE_OWNER || github.repository_owner }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const map = {
+              access:   { file: 'access-review',   title: 'Access review (quarterly)' },
+              risk:     { file: 'risk-review',     title: 'Risk register review (quarterly)' },
+              vendor:   { file: 'vendor-review',   title: 'Vendor / subprocessor review (annual)' },
+              dr:       { file: 'dr-review',       title: 'DR review & sign-off (annual)' },
+              training: { file: 'training-review', title: 'Security training (annual)' },
+              pentest:  { file: 'pentest-review',  title: 'Independent penetration test (annual)' },
+            };
+            let due = [];
+            if (context.eventName === 'schedule') {
+              const cron = context.payload.schedule;
+              if (cron === '0 9 1 1,4,7,10 *') due = ['access', 'risk'];
+              else if (cron === '0 9 8 1 *') due = ['vendor', 'dr', 'training', 'pentest'];
+            } else {
+              const pick = context.payload.inputs.review;
+              due = pick === 'all' ? Object.keys(map) : [pick];
+            }
+            // Ensure the label exists.
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: 'compliance' });
+            } catch {
+              await github.rest.issues.createLabel({ owner, repo, name: 'compliance', color: 'FBCA04', description: 'Compliance cadence' });
+            }
+            const assignee = process.env.COMPLIANCE_OWNER;
+            const today = new Date().toISOString().slice(0, 10);
+            for (const k of due) {
+              const body = fs.readFileSync(`.github/compliance/${map[k].file}.md`, 'utf8');
+              const issue = await github.rest.issues.create({
+                owner, repo,
+                title: `[Compliance] ${map[k].title} — opened ${today}`,
+                body, labels: ['compliance'], assignees: [assignee],
+              });
+              core.info(`Opened #${issue.data.number}: ${map[k].title}`);
+            }
