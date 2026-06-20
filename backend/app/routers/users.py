@@ -5,6 +5,7 @@ arbitrary id, so there's no object-level authorization gap (review in Module 06)
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from ..audit import audit
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import User
@@ -31,6 +32,7 @@ def update_me(
     db.add(current)
     db.commit()
     db.refresh(current)
+    audit("user.profile_update", actor=current.email)
     return current
 
 
@@ -39,6 +41,9 @@ def delete_me(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
+    email = current.email
     db.delete(current)
     db.commit()
+    # Privacy event (GDPR Art. 17) — keep this audit record per your retention policy.
+    audit("user.delete", actor=email)
     return None

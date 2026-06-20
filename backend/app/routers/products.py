@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..audit import audit
 from ..database import get_db
 from ..deps import require_admin
 from ..models import Product, User
@@ -50,7 +51,7 @@ def get_product(product_id: int, db: Session = Depends(get_db)) -> Product:
 def create_product(
     body: ProductIn,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
 ) -> Product:
     product = Product(
         name=body.name,
@@ -63,4 +64,5 @@ def create_product(
     db.add(product)
     db.commit()
     db.refresh(product)
+    audit("admin.product_create", actor=admin.email, product_id=product.id)
     return product
