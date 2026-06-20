@@ -1,13 +1,36 @@
-# Keep this updated as you add ecosystems — this only covers what
-# tools/scaffold.py copied in. Add "pip"/"npm"/"docker"/etc. entries
-# once you add your actual application code.
+# Dependabot — kept quiet: monthly, with all updates per ecosystem grouped into
+# a single PR (so it doesn't flood the repo). Covers every ecosystem this repo
+# actually uses. Security updates are delivered separately and aren't throttled.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+
   - package-ecosystem: "terraform"
     directory: "/iac-terraform/gcp-cloud-run"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      terraform:
+        patterns: ["*"]
+
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "monthly"
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "monthly"
+    groups:
+      javascript:
+        patterns: ["*"]
