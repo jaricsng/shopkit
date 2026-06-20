@@ -355,7 +355,13 @@ jobs:
           working_directory: iac-terraform/gcp-cloud-run
           soft_fail: true
 
+      # The cloud steps below only run once you've configured GCP Workload
+      # Identity and set the repo variable ENABLE_TERRAFORM_PLAN=true. Without
+      # creds, `terraform plan` HANGS on metadata/auth timeouts (continue-on-error
+      # still leaves the job stalled for minutes), so we skip rather than hang.
+      # tfsec above always runs — it needs no credentials.
       - name: Authenticate to cloud (Workload Identity — keyless)
+        if: vars.ENABLE_TERRAFORM_PLAN == 'true'
         # TODO: replace with your cloud provider's auth action (AWS/Azure/GCP)
         # and add the corresponding secrets in repo settings.
         uses: google-github-actions/auth@v2
@@ -365,12 +371,14 @@ jobs:
         continue-on-error: true   # allow tfsec results to be posted even without cloud auth set up
 
       - name: Terraform init
+        if: vars.ENABLE_TERRAFORM_PLAN == 'true'
         run: terraform init
         # TODO: point at your environment directory (e.g. environments/staging)
         working-directory: iac-terraform/gcp-cloud-run
         continue-on-error: true   # non-blocking until cloud auth is configured
 
       - name: Terraform plan
+        if: vars.ENABLE_TERRAFORM_PLAN == 'true'
         id: plan
         run: |
           terraform plan -no-color -out=tfplan.binary \
@@ -386,6 +394,7 @@ jobs:
       # No-ops if the policy folder isn't present. See
       # governance/policy-as-code/README.md.
       - name: Setup conftest
+        if: vars.ENABLE_TERRAFORM_PLAN == 'true'
         run: |
           CONFTEST_VERSION=0.56.0
           curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
@@ -393,6 +402,7 @@ jobs:
           sudo mv /tmp/conftest /usr/local/bin/
 
       - name: Conftest policy-as-code gate (report mode)
+        if: vars.ENABLE_TERRAFORM_PLAN == 'true'
         run: |
           if [ -d ../../governance/policy-as-code/policy ]; then
             terraform show -json tfplan.binary > tfplan.json
@@ -404,7 +414,7 @@ jobs:
         continue-on-error: true   # remove this line to hard-gate the PR on a policy violation
 
       - name: Post plan as PR comment
-        if: always()
+        if: always() && vars.ENABLE_TERRAFORM_PLAN == 'true'
         uses: actions/github-script@v7
         with:
           script: |
