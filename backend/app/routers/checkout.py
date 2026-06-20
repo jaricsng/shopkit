@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..audit import audit
 from ..config import get_settings
 from ..database import get_db
 from ..deps import get_current_user
@@ -57,6 +58,7 @@ def checkout(
         db.delete(i)
     db.commit()
     db.refresh(order)
+    audit("checkout", actor=current.email, order_id=order.id, total_cents=order.total_cents)
     return CheckoutResponse(
         order_id=order.id,
         total_cents=order.total_cents,
