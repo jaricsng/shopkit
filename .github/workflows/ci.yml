@@ -247,14 +247,14 @@ jobs:
       # Scan the built images for OS/library CVEs BEFORE merge (shift-left).
       # ignore-unfixed = only fail on CVEs that actually have a fix available.
       - name: Scan API image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: shopkit-app
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan frontend image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: shopkit-frontend
           severity: HIGH,CRITICAL
