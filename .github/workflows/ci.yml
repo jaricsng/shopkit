@@ -158,6 +158,11 @@ jobs:
         run: pip-audit --desc --format columns
         working-directory: backend
 
+      - name: License compliance — Python (no strong copyleft)
+        # Fail on GPL/AGPL; LGPL (psycopg) and MPL (certifi) are allowed.
+        run: pip-licenses --fail-on="GPL-3.0-only;GPL-3.0-or-later;GPL-2.0-only;GPL-2.0-or-later;AGPL-3.0-only;AGPL-3.0-or-later"
+        working-directory: backend
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -172,6 +177,11 @@ jobs:
       - name: Dependency CVEs — npm audit (JavaScript)
         # --audit-level=high: only fail on high/critical CVEs
         run: npm audit --audit-level=high
+        working-directory: frontend
+
+      - name: License compliance — JS (permissive only)
+        # Third-party production deps must be permissive; skip our own private pkg.
+        run: npx --yes license-checker --production --excludePrivatePackages --onlyAllow 'MIT;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;CC0-1.0;Unlicense;BlueOak-1.0.0;Python-2.0'
         working-directory: frontend
 
       - name: Secret pattern scan
@@ -227,10 +237,29 @@ jobs:
     name: Docker Compose build
     runs-on: ubuntu-latest
     needs: [backend, frontend]   # only build images after tests pass — fail fast
+    env:
+      COMPOSE_PROJECT_NAME: shopkit   # deterministic image names for the scan below
     steps:
       - uses: actions/checkout@v4
       - name: Build all images
         run: docker compose build
+
+      # Scan the built images for OS/library CVEs BEFORE merge (shift-left).
+      # ignore-unfixed = only fail on CVEs that actually have a fix available.
+      - name: Scan API image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: shopkit-app
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan frontend image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: shopkit-frontend
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
 
   smoke-test:
     name: k6 smoke test
