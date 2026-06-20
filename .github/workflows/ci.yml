@@ -349,7 +349,7 @@ jobs:
       - name: tfsec IaC security scan
         # Static analysis of all Terraform HCL — no cloud credentials required.
         # soft_fail: true means findings are reported but do not fail the build.
-        uses: aquasecurity/tfsec-action@v1.0.0
+        uses: aquasecurity/tfsec-action@v1.0.3
         with:
           # TODO: point at your Terraform root
           working_directory: iac-terraform/gcp-cloud-run
